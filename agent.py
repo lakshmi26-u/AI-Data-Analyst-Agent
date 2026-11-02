@@ -1,37 +1,38 @@
 
 import pandas as pd
 import plotly.express as px
-from google import genai
-from google.genai import types
 import streamlit as st
 
-def display_analysis_chart(tool_name, result):
+from google import genai
+from google.genai import types
 
-    if tool_name == "top_products":
-        fig = px.bar(result, x="Product", y="Revenue",
-                     title="Top Products by Revenue", text="Revenue")
 
-    elif tool_name == "monthly_sales":
-        fig = px.bar(result.sort_values("Order_Date"),
-                     x="Order_Date", y="Revenue",
-                     title="Monthly Revenue", text="Revenue")
+# --------------------------------------------------
+# 1. GEMINI CLIENT
+# --------------------------------------------------
 
-    elif tool_name == "category_aov":
-        fig = px.bar(result, x="Category",
-                     y="average_order_value",
-                     title="Average Order Value by Category",
-                     text="average_order_value")
+def get_gemini_client():
 
-    elif tool_name == "detect_trends":
-        fig = px.line(result, x="Order_Date", y="Revenue",
-                      markers=True, title="Monthly Revenue Trend")
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
+    except Exception:
+        api_key = None
 
-    else:
-        return None
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY not found. "
+            "Please configure it in Streamlit Secrets."
+        )
 
-    return fig
+    return genai.Client(api_key=api_key)
+
+
+# --------------------------------------------------
+# 2. DATA ANALYSIS FUNCTIONS
+# --------------------------------------------------
 
 def get_top_products(df, n=5):
+
     required_columns = ["Product", "Revenue"]
 
     for column in required_columns:
@@ -41,8 +42,8 @@ def get_top_products(df, n=5):
     if not pd.api.types.is_numeric_dtype(df["Revenue"]):
         raise ValueError("Revenue must be numeric.")
 
-    if n < 1:
-        raise ValueError("n must be at least 1.")
+    if type(n) is not int or n < 1 or n > 20:
+        raise ValueError("n must be an integer between 1 and 20.")
 
     result = (
         df.groupby("Product")["Revenue"]
@@ -56,6 +57,7 @@ def get_top_products(df, n=5):
 
 
 def get_monthly_sales(df):
+
     required_columns = ["Order_Date", "Revenue"]
 
     for column in required_columns:
@@ -71,16 +73,19 @@ def get_monthly_sales(df):
     monthly_sales = (
         df.groupby(df["Order_Date"].dt.to_period("M"))["Revenue"]
         .sum()
-        .sort_values(ascending=False)
+        .sort_index()
         .reset_index()
     )
 
-    monthly_sales["Order_Date"] = monthly_sales["Order_Date"].astype(str)
+    monthly_sales["Order_Date"] = (
+        monthly_sales["Order_Date"].astype(str)
+    )
 
     return monthly_sales
 
 
 def get_category_aov(df):
+
     required_columns = ["Category", "Order_ID", "Revenue"]
 
     for column in required_columns:
@@ -107,11 +112,13 @@ def get_category_aov(df):
     )
 
     return result.sort_values(
-        "average_order_value", ascending=False
+        "average_order_value",
+        ascending=False
     )
 
 
 def detect_sales_trends(df, threshold_pct=30):
+
     required_columns = ["Order_Date", "Revenue"]
 
     for column in required_columns:
@@ -127,12 +134,16 @@ def detect_sales_trends(df, threshold_pct=30):
     if df["Order_Date"].isna().any() or df["Revenue"].isna().any():
         raise ValueError("Date and Revenue cannot contain missing values.")
 
-    if threshold_pct <= 0:
-        raise ValueError("Threshold must be greater than zero.")
+    if not isinstance(threshold_pct, (int, float)):
+        raise ValueError("Threshold must be numeric.")
+
+    if not 0 < threshold_pct <= 1000:
+        raise ValueError("Threshold must be between 0 and 1000.")
 
     monthly = (
         df.groupby(df["Order_Date"].dt.to_period("M"))["Revenue"]
         .sum()
+        .sort_index()
         .reset_index()
     )
 
@@ -148,6 +159,11 @@ def detect_sales_trends(df, threshold_pct=30):
 
     return monthly
 
+
+# --------------------------------------------------
+# 3. REGISTER APPROVED ANALYSIS TOOLS
+# --------------------------------------------------
+
 ANALYSIS_TOOLS = {
     "top_products": get_top_products,
     "monthly_sales": get_monthly_sales,
@@ -155,13 +171,18 @@ ANALYSIS_TOOLS = {
     "detect_trends": detect_sales_trends
 }
 
+
+# --------------------------------------------------
+# 4. EXECUTE ANALYSIS SAFELY
+# --------------------------------------------------
+
 def run_analysis_tool(df, tool_name, arguments=None):
 
     if arguments is None:
         arguments = {}
 
     if tool_name not in ANALYSIS_TOOLS:
-        raise ValueError(f"Tool '{tool_name}' is not allowed.")
+        raise ValueError("This analysis tool is not allowed.")
 
     if not isinstance(arguments, dict):
         raise ValueError("Arguments must be a dictionary.")
@@ -173,8 +194,8 @@ def run_analysis_tool(df, tool_name, arguments=None):
 
         n = arguments.get("n", 5)
 
-        if type(n) is not int or n < 1 or n > 20:
-            raise ValueError("n must be an integer between 1 and 20.")
+        if type(n) is not int or not 1 <= n <= 20:
+            raise ValueError("n must be between 1 and 20.")
 
         return get_top_products(df, n=n)
 
@@ -205,7 +226,15 @@ def run_analysis_tool(df, tool_name, arguments=None):
         if not 0 < threshold <= 1000:
             raise ValueError("Threshold must be between 0 and 1000.")
 
-        return detect_sales_trends(df, threshold_pct=threshold)
+        return detect_sales_trends(
+            df,
+            threshold_pct=threshold
+        )
+
+
+# --------------------------------------------------
+# 5. GEMINI FUNCTION DECLARATIONS
+# --------------------------------------------------
 
 top_products_tool = types.FunctionDeclaration(
     name="top_products",
@@ -221,6 +250,7 @@ top_products_tool = types.FunctionDeclaration(
     )
 )
 
+
 monthly_sales_tool = types.FunctionDeclaration(
     name="monthly_sales",
     description="Calculate total revenue for each month.",
@@ -230,6 +260,7 @@ monthly_sales_tool = types.FunctionDeclaration(
     )
 )
 
+
 category_aov_tool = types.FunctionDeclaration(
     name="category_aov",
     description="Calculate average order value for each category.",
@@ -238,6 +269,7 @@ category_aov_tool = types.FunctionDeclaration(
         properties={}
     )
 )
+
 
 detect_trends_tool = types.FunctionDeclaration(
     name="detect_trends",
@@ -253,6 +285,7 @@ detect_trends_tool = types.FunctionDeclaration(
     )
 )
 
+
 analysis_tool = types.Tool(
     function_declarations=[
         top_products_tool,
@@ -262,18 +295,54 @@ analysis_tool = types.Tool(
     ]
 )
 
-def get_gemini_client():
 
-    api_key = st.secrets.get("GEMINI_API_KEY", None)
+# --------------------------------------------------
+# 6. CHECK WHETHER QUESTION IS SUPPORTED
+# --------------------------------------------------
 
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY not found in Streamlit secrets."
-        )
+def is_supported_question(user_question):
 
-    return genai.Client(api_key=api_key)
+    question = user_question.lower()
+
+    supported_topics = [
+        "sales",
+        "revenue",
+        "product",
+        "products",
+        "category",
+        "categories",
+        "monthly",
+        "month",
+        "trend",
+        "trends",
+        "order",
+        "orders",
+        "average order value",
+        "aov",
+        "highest",
+        "lowest",
+        "top",
+        "best",
+        "performance"
+    ]
+
+    return any(
+        word in question
+        for word in supported_topics
+    )
+
+
+# --------------------------------------------------
+# 7. GEMINI SELECTS THE ANALYSIS TOOL
+# --------------------------------------------------
 
 def select_analysis_tool(user_question, data, client):
+
+    if not is_supported_question(user_question):
+        raise ValueError(
+            "Sorry, I can only answer questions related "
+            "to the available sales analysis."
+        )
 
     schema = []
 
@@ -295,33 +364,45 @@ def select_analysis_tool(user_question, data, client):
         AVAILABLE DATASET SCHEMA:
         {schema}
 
-        Select the most appropriate analysis tool.
+        AVAILABLE TOOLS:
+        - top_products: Find top products by revenue.
+        - monthly_sales: Calculate monthly revenue.
+        - category_aov: Calculate average order value.
+        - detect_trends: Detect unusual monthly revenue changes.
 
         Rules:
-        - Only select from the registered tools.
+        - Select only a registered analysis tool.
         - Never invent column names.
         - Do not calculate results yourself.
         - Python will perform all calculations.
+        - If no tool matches, do not make up an answer.
         """,
         config=types.GenerateContentConfig(
             tools=[analysis_tool],
             tool_config=types.ToolConfig(
                 function_calling_config=types.FunctionCallingConfig(
-                    mode="ANY"
+                    mode="AUTO"
                 )
             )
         )
     )
 
     if not response.function_calls:
-        raise ValueError("Gemini did not select an analysis tool.")
+        raise ValueError(
+            "Gemini did not select a suitable analysis tool."
+        )
 
     return response.function_calls[0]
+
+
+# --------------------------------------------------
+# 8. EXECUTE GEMINI'S TOOL SELECTION
+# --------------------------------------------------
 
 def execute_analysis(df, function_call):
 
     tool_name = function_call.name
-    arguments = dict(function_call.args)
+    arguments = dict(function_call.args or {})
 
     result = run_analysis_tool(
         df,
@@ -330,6 +411,11 @@ def execute_analysis(df, function_call):
     )
 
     return result
+
+
+# --------------------------------------------------
+# 9. GENERATE BUSINESS INSIGHTS
+# --------------------------------------------------
 
 def generate_business_insight(
     user_question,
@@ -363,7 +449,15 @@ def generate_business_insight(
         contents=prompt
     )
 
+    if not response.text:
+        raise ValueError("Gemini did not generate a business insight.")
+
     return response.text
+
+
+# --------------------------------------------------
+# 10. MAIN AGENT FUNCTION
+# --------------------------------------------------
 
 def answer_question(df, user_question, client):
 
@@ -389,66 +483,53 @@ def answer_question(df, user_question, client):
     return tool_name, result, insight
 
 
-def select_analysis_tool(user_question, data, client):
+# --------------------------------------------------
+# 11. DISPLAY CHARTS
+# --------------------------------------------------
 
-    if not is_supported_question(user_question):
-        raise ValueError(
-            "Sorry, I can only answer questions related to the available sales analysis."
+def display_analysis_chart(tool_name, result):
+
+    if tool_name == "top_products":
+
+        fig = px.bar(
+            result,
+            x="Product",
+            y="Revenue",
+            title="Top Products by Revenue",
+            text="Revenue"
         )
 
-    schema = []
+    elif tool_name == "monthly_sales":
 
-    for column in data.columns:
-        schema.append({
-            "column_name": column,
-            "data_type": str(data[column].dtype),
-            "missing_values": int(data[column].isnull().sum())
-        })
-
-    response = client.models.generate_content(
-        model="gemini-3.5-flash-lite",
-        contents=f"""
-        You are a professional Data Analyst AI Agent.
-
-        USER QUESTION:
-        {user_question}
-
-        AVAILABLE DATASET SCHEMA:
-        {schema}
-
-        AVAILABLE TOOLS:
-        - top_products: Find top products by revenue.
-        - monthly_sales: Calculate monthly revenue.
-        - category_aov: Calculate average order value.
-        - detect_trends: Detect unusual monthly revenue changes.
-
-        Select a tool only if it matches the user's question.
-        Never invent column names or calculate results yourself.
-        """,
-        config=types.GenerateContentConfig(
-            tools=[analysis_tool],
-            tool_config=types.ToolConfig(
-                function_calling_config=types.FunctionCallingConfig(
-                    mode="AUTO"
-                )
-            )
+        fig = px.bar(
+            result,
+            x="Order_Date",
+            y="Revenue",
+            title="Monthly Revenue",
+            text="Revenue"
         )
-    )
 
-    if not response.function_calls:
-        raise ValueError("No suitable analysis tool was selected.")
+    elif tool_name == "category_aov":
 
-    return response.function_calls[0]
+        fig = px.bar(
+            result,
+            x="Category",
+            y="average_order_value",
+            title="Average Order Value by Category",
+            text="average_order_value"
+        )
 
-def is_supported_question(user_question):
-    question = user_question.lower()
+    elif tool_name == "detect_trends":
 
-    supported_topics = [
-        "sales", "revenue", "product", "products",
-        "category", "categories", "monthly", "month",
-        "trend", "trends", "order", "orders",
-        "average order value", "aov", "highest", "lowest",
-        "top", "best", "performance"
-    ]
+        fig = px.line(
+            result,
+            x="Order_Date",
+            y="Revenue",
+            markers=True,
+            title="Monthly Revenue Trend"
+        )
 
-    return any(word in question for word in supported_topics)
+    else:
+        return None
+
+    return fig
