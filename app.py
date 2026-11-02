@@ -1,9 +1,8 @@
 
-import os
 import streamlit as st
 import pandas as pd
 import agent
-from google import genai
+
 
 # --------------------------------------------------
 # 1. PAGE CONFIGURATION
@@ -18,17 +17,21 @@ st.set_page_config(
 st.title("📊 AI Data Analyst Agent")
 st.write("Upload your sales CSV and ask questions using AI.")
 
+
 # --------------------------------------------------
 # 2. GEMINI API CONNECTION
 # --------------------------------------------------
 
-api_key = os.getenv("GEMINI_API_KEY")
+try:
+    client = agent.get_gemini_client()
 
-if not api_key:
-    st.error("Gemini API key is not configured.")
+except Exception:
+    st.error(
+        "Gemini API key is not configured. "
+        "Please add GEMINI_API_KEY in Streamlit Secrets."
+    )
     st.stop()
 
-client = genai.Client(api_key=api_key)
 
 # --------------------------------------------------
 # 3. CSV FILE UPLOAD
@@ -41,18 +44,23 @@ uploaded_file = st.sidebar.file_uploader(
     type=["csv"]
 )
 
+
 if uploaded_file is not None:
 
     try:
-        # Read CSV
         df = pd.read_csv(uploaded_file)
+
+        if df.empty:
+            st.error("The uploaded CSV file is empty.")
+            st.stop()
 
         # --------------------------------------------------
         # 4. DATA PREPARATION
         # --------------------------------------------------
 
-        # Convert Order_Date into datetime
+        # Convert dates
         if "Order_Date" in df.columns:
+
             df["Order_Date"] = pd.to_datetime(
                 df["Order_Date"],
                 errors="coerce"
@@ -64,15 +72,26 @@ if uploaded_file is not None:
             and "Quantity" in df.columns
             and "Unit_Price" in df.columns
         ):
+
             df["Revenue"] = (
-                df["Quantity"] * df["Unit_Price"]
+                pd.to_numeric(df["Quantity"], errors="coerce")
+                *
+                pd.to_numeric(df["Unit_Price"], errors="coerce")
+            )
+
+        # Convert Revenue to numeric
+        if "Revenue" in df.columns:
+
+            df["Revenue"] = pd.to_numeric(
+                df["Revenue"],
+                errors="coerce"
             )
 
         # --------------------------------------------------
         # 5. DATA VALIDATION
         # --------------------------------------------------
 
-        required = [
+        required_columns = [
             "Order_ID",
             "Order_Date",
             "Product",
@@ -80,37 +99,34 @@ if uploaded_file is not None:
             "Revenue"
         ]
 
-        missing = [
-            col for col in required
-            if col not in df.columns
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in df.columns
         ]
 
-        if missing:
-            st.error(f"Missing required columns: {missing}")
+        if missing_columns:
+
+            st.error(
+                f"Missing required columns: {missing_columns}"
+            )
             st.stop()
 
-        # Check missing or invalid required values
-        if df[required].isnull().any().any():
+        # Check missing and invalid values
+        if df[required_columns].isnull().any().any():
+
             st.error(
                 "Required columns contain missing or invalid values."
             )
             st.stop()
 
-        # Validate Revenue
-        if not pd.api.types.is_numeric_dtype(df["Revenue"]):
-            st.error("Revenue must be numeric.")
-            st.stop()
+        # Check infinite revenue values
+        if not df["Revenue"].replace(
+            [float("inf"), float("-inf")],
+            pd.NA
+        ).notna().all():
 
-        if not pd.Series(
-            pd.to_numeric(df["Revenue"], errors="coerce")
-        ).map(
-            lambda x: pd.notna(x) and abs(x) != float("inf")
-        ).all():
             st.error("Revenue contains invalid values.")
-            st.stop()
-
-        if df.empty:
-            st.error("The uploaded CSV file is empty.")
             st.stop()
 
         st.success("Dataset uploaded successfully!")
@@ -171,6 +187,7 @@ if uploaded_file is not None:
             else:
 
                 try:
+
                     with st.spinner("Analysing your data..."):
 
                         tool_name, result, insight = (
@@ -222,21 +239,22 @@ if uploaded_file is not None:
 
                     st.write(insight)
 
-                except Exception:
+                except Exception as error:
 
                     st.error(
-                        "Analysis failed. Please check your question "
-                        "and try again."
+                        f"Analysis failed: {error}"
                     )
 
-    except Exception:
+    except Exception as error:
 
         st.error(
-            "Could not read the CSV file. "
-            "Please upload a valid CSV file."
+            f"Could not process the CSV file: {error}"
         )
 
 else:
 
-    st.info("Please upload a CSV file to get started.")
+    st.info(
+        "Please upload a CSV file to get started."
+    )
+
 
