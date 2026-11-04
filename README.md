@@ -1,5 +1,7 @@
 # AI Data Analyst Agent 🤖📊
-https://ai-data-analyst-agent-uns3kbfvdpzddmunbacpvk.streamlit.app/
+visit:    https://ai-data-analyst-agent-uns3kbfvdpzddmunbacpvk.streamlit.app/
+
+
 An AI-powered sales data analysis application that allows users to explore sales data using natural-language questions. It combines Google's Gemini API with Python data-analysis tools to generate analytical results, visualizations, and business insights.
 
 ## 🚀 Project Overview
